@@ -1,0 +1,1 @@
+/home/ziga/Projects/Oasis/sapphire-precompiles/sapphire-precompiles/src/precompiles/target/release/curve25519_compute_public: /home/ziga/Projects/Oasis/sapphire-precompiles/sapphire-precompiles/src/precompiles/src/main.rs

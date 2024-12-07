@@ -1,0 +1,1 @@
+/home/ziga/Projects/Oasis/sapphire-precompiles/sapphire-precompiles/src/precompiles/target/release/keypair_generate: /home/ziga/Projects/Oasis/sapphire-precompiles/sapphire-precompiles/src/precompiles/src/main.rs
