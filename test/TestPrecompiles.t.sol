@@ -87,16 +87,29 @@ contract PrecompileTest is Test, Precompiles {
         bytes memory plaintext = bytes("test message");
         bytes memory ad = bytes("additional data");
 
+        // Add debug logging for inputs
+        console.logBytes32(key);
+        console.logBytes32(nonce);
+        console.logBytes(plaintext);
+        console.logBytes(ad);
+
         // Test seal
         (bool success, bytes memory encrypted_data) = DEOXYSII_SEAL.call(abi.encode(key, nonce, plaintext, ad));
         assertTrue(success, "Seal call failed");
         assertNotEq(abi.decode(encrypted_data, (bytes)), plaintext, "Sealed should differ from plaintext");
 
+        // Add debug logging for encrypted data
+        console.logBytes(abi.decode(encrypted_data, (bytes)));
+
         // Test open
-        (bool successOpen, bytes memory opened) = DEOXYSII_OPEN.call(abi.encode(key, nonce, encrypted_data, ad));
+        (bool successOpen, bytes memory opened) = DEOXYSII_OPEN.call(abi.encode(key, nonce, abi.decode(encrypted_data, (bytes)), ad));
         assertTrue(successOpen, "Open call failed");
+
+        // Add debug logging for opened data before decoding
+        console.logBytes(opened);
+        
         // Log results
-        console.log("Encrypted data:", string(encrypted_data));
+        console.log("Encrypted data:", string(abi.decode(encrypted_data, (bytes))));
         console.log("Opened data:", string(opened));
         assertEq(abi.decode(opened, (bytes)), plaintext, "Opened should match original plaintext");
 

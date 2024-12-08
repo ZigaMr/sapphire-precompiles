@@ -109,7 +109,7 @@ fn handle_deoxysii_seal() {
     // 1. Encrypt the plaintext
     // 2. Compute an authentication tag over the ciphertext and associated data
     // 3. Return the concatenation of ciphertext and tag
-    let ciphertext = deoxysii.seal(&nonce, &plaintext, &ad);
+    let ciphertext = deoxysii.seal(&nonce, plaintext, ad);
 
     // Output the hex-encoded ciphertext + tag
     print!("{}", hex::encode(ciphertext));
@@ -123,22 +123,22 @@ fn handle_deoxysii_open() {
         hex::decode(raw_input).expect("Invalid hex input")
     };
 
+    // We use the same decoding function as seal, since the parameter format is identical
     let (key, nonce, ciphertext, ad) = decode_deoxysii_args(&input)
         .expect("Failed to decode deoxysii arguments");
 
-    // Create Deoxys-II instance with the same key
+    // Create the Deoxys-II instance with our key
     let deoxysii = DeoxysII::new(&key);
 
-    // The open operation will:
-    // 1. Verify the authentication tag
-    // 2. If verification succeeds, decrypt the ciphertext
-    // 3. Return Ok(plaintext) or Err if authentication fails
-    match deoxysii.open(&nonce, ciphertext, &ad) {
-        Ok(plaintext) => print!("{}", hex::encode(plaintext)),
-        Err(_) => {
-            eprintln!("Authentication failed");
-            std::process::exit(1)
-        }
+    // The SDK makes an explicit copy of the ciphertext before passing it to open
+    let ciphertext = ciphertext.to_vec();
+
+    // Match the error handling pattern from the SDK:
+    // - On success: return the decrypted data
+    // - On failure: exit with status code 1 (matching the Revert behavior)
+    match deoxysii.open(&nonce, ciphertext, ad) {
+        Ok(decrypted) => print!("{}", hex::encode(decrypted)),
+        Err(_) => std::process::exit(1)
     }
 }
 
