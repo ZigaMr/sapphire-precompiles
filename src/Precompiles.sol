@@ -25,7 +25,7 @@ contract Precompiles {
     
     // Curve25519 Compute Public
     address public constant CURVE25519_COMPUTE_PUBLIC = 0x0100000000000000000000000000000000000008;
-
+    
     // Oasis-specific, general precompiles
     address public constant SHA512_256 =
         0x0100000000000000000000000000000000000101;

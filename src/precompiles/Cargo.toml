@@ -39,12 +39,11 @@ path = "src/main.rs"
 ethabi = "18.0"
 hex = "0.4"
 hmac = "0.12"
+once_cell = "1.18"
 sha2 = "0.10"
-sha3 = "0.10"
+x25519-dalek = "2.0"
 rand = "0.8"
-rand_chacha = "0.3"
-x25519-dalek = "=2.0.0-pre.1"
-deoxysii = "0.2.4"
+oasis-runtime-sdk = { git = "https://github.com/oasisprotocol/oasis-sdk", package = "oasis-runtime-sdk", branch = "main" }
 
 [build]
 rustflags = ["-C", "target-feature=+aes,+ssse3"]

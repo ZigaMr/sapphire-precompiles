@@ -122,35 +122,50 @@ contract PrecompileTest is Test, Precompiles {
 
     function testKeypairGenerateAndSign() public {
         uint256 sigType = 0; // Ed25519_Oasis
-        bytes memory seed = bytes("01234567890123456789012345678901");
+        bytes memory seed = hex"0123456789012345678901234567890123456789012345678901234567890123";
         bytes memory message = bytes("test message");
         bytes memory context = bytes("test context");
 
         // Generate keypair
         (bool success, bytes memory result) = KEYPAIR_GENERATE.call(abi.encode(sigType, seed));
         assertTrue(success, "Keypair generation failed");
-        
+
+        // Properly decode the keypair - ensure we get the actual bytes
         (bytes memory publicKey, bytes memory privateKey) = abi.decode(result, (bytes, bytes));
-        assertTrue(publicKey.length > 0, "Empty public key");
-        assertTrue(privateKey.length > 0, "Empty private key");
 
         // Sign message
-        (bool successSign, bytes memory signature) = SIGN.call(
+        (bool successSign, bytes memory signResult) = SIGN.call(
             abi.encode(sigType, privateKey, context, message)
         );
         assertTrue(successSign, "Signing failed");
 
-        // Verify signature
+        // Get signature bytes - don't re-encode
+        bytes memory signature = signResult;
+
+        // Verify signature - ensure all parameters are properly encoded
         (bool successVerify, bytes memory verifyResult) = VERIFY.call(
-            abi.encode(sigType, publicKey, context, message, signature)
+            abi.encode(
+                sigType,          // uint256
+                publicKey,        // bytes - just the raw public key
+                context,          // bytes
+                message,         // bytes 
+                signature        // bytes - just the raw signature
+            )
         );
         assertTrue(successVerify, "Verification call failed");
-        assertTrue(abi.decode(verifyResult, (bool)), "Signature verification failed");
+        
+        bool verified = abi.decode(verifyResult, (bool));
+        assertTrue(verified, "Signature verification failed");
 
-        // Test precompile
+        // Test via precompile interface for comparison
         bytes memory precompileKeys = precompile.keypair_generate(sigType, seed);
         (bytes memory ppubKey, bytes memory pprivKey) = abi.decode(precompileKeys, (bytes, bytes));
         
+        // Compare keys
+        assertEq(keccak256(ppubKey), keccak256(publicKey), "Precompile public key mismatch");
+        assertEq(keccak256(pprivKey), keccak256(privateKey), "Precompile private key mismatch");
+
+        // Sign and verify with precompile
         bytes memory precompileSig = precompile.sign(sigType, pprivKey, context, message);
         bool precompileVerified = precompile.verify(sigType, ppubKey, context, message, precompileSig);
         assertTrue(precompileVerified, "Precompile signature verification failed");
