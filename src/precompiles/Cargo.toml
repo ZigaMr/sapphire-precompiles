@@ -35,6 +35,30 @@ path = "src/main.rs"
 name = "verify"
 path = "src/main.rs"
 
+[[bin]]
+name = "gas_used"
+path = "src/main.rs"
+
+[[bin]]
+name = "pad_gas"
+path = "src/main.rs"
+
+[[bin]]
+name = "subcall"
+path = "src/main.rs"
+
+[[bin]]
+name = "core_calldata_public_key"
+path = "src/main.rs"
+
+[[bin]]
+name = "core_current_epoch"
+path = "src/main.rs"
+
+[[bin]]
+name = "rofl_is_authorized_origin"
+path = "src/main.rs"
+
 [dependencies]
 ethabi = "18.0"
 hex = "0.4"
@@ -44,6 +68,8 @@ sha2 = "0.10"
 x25519-dalek = "2.0"
 rand = "0.8"
 oasis-runtime-sdk = { git = "https://github.com/oasisprotocol/oasis-sdk", package = "oasis-runtime-sdk", branch = "main" }
+evm = { git = "https://github.com/oasisprotocol/evm", tag = "v0.39.1-oasis" }
+
 
 [build]
 rustflags = ["-C", "target-feature=+aes,+ssse3"]

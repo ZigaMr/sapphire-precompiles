@@ -127,7 +127,12 @@ fn handle_keypair_generate(input: &[u8]) -> Result<Vec<u8>, String> {
     let public = signer.public_key().as_bytes().to_vec();
     let private = signer.to_bytes();
 
-    Ok(ethabi::encode(&[Token::Bytes(public), Token::Bytes(private)]))
+    //let mut result = Vec::new();
+    //result.extend_from_slice(&public);
+    //result.extend_from_slice(&private);
+    let result = ethabi::encode(&[Token::Bytes(public), Token::Bytes(private)]);
+
+    Ok(result)
 }
 
 fn handle_sign(input: &[u8]) -> Result<Vec<u8>, String> {
@@ -199,6 +204,123 @@ fn handle_verify(input: &[u8]) -> Result<Vec<u8>, String> {
     Ok(ethabi::encode(&[Token::Bool(result.is_ok())]))
 }
 
+fn handle_gas_used(input: &[u8]) -> Result<Vec<u8>, String> {
+    // Simply return a fixed gas cost for now since we can't 
+    // actually track gas usage in the standalone binary
+    let used_gas: u64 = 10;
+    
+    // Return the gas usage encoded as uint256
+    Ok(ethabi::encode(&[Token::Uint(used_gas.into())]))
+}
+
+fn handle_pad_gas(input: &[u8]) -> Result<Vec<u8>, String> {
+    // Decode the target gas amount
+    let call_args = ethabi::decode(
+        &[ParamType::Uint(128)],
+        input,
+    ).map_err(|e| e.to_string())?;
+
+    let gas_amount: u64 = call_args[0]
+        .clone()
+        .into_uint()
+        .unwrap()
+        .try_into()
+        .unwrap_or(u64::MAX);
+
+    // For simulation purposes, assume we've used 10 gas so far
+    let used_gas: u64 = 10;
+
+    // Fail if more gas than desired padding was already used
+    if gas_amount < used_gas {
+        return Err("gas pad amount less than already used gas".into());
+    }
+
+    // Return empty output since pad_gas doesn't return anything
+    Ok(Vec::new())
+}
+
+fn handle_subcall(input: &[u8]) -> Result<Vec<u8>, String> {
+    // Decode input arguments like in the original precompile
+    let call_args = ethabi::decode(
+        &[
+            ParamType::Bytes, // method
+            ParamType::Bytes, // body (CBOR)
+        ],
+        input,
+    ).map_err(|e| e.to_string())?;
+
+    // Parse raw arguments
+    let body = call_args[1].clone().into_bytes().unwrap();
+    let method = call_args[0].clone().into_bytes().unwrap();
+
+    // Parse method string from bytes
+    let method = String::from_utf8(method)
+        .map_err(|_| "method is malformed".to_string())?;
+
+    // Basic validation (like the ForbidReentrancy validator)
+    if method.starts_with("evm.") {
+        return Ok(ethabi::encode(&[
+            Token::Uint(1.into()),    // Error status code
+            Token::Bytes("core".into()) // Module name
+        ]));
+    }
+
+    // Parse body as CBOR
+    let body = oasis_runtime_sdk::cbor::from_slice(&body)
+        .map_err(|_| "body is malformed".to_string())?;
+
+    // For test purposes, simulate specific method calls:
+    match method.as_str() {
+        // "accounts.Transfer" => {
+        //     // Simulate successful transfer
+        //     Ok(ethabi::encode(&[
+        //         Token::Uint(0.into()),
+        //         Token::Bytes(oasis_runtime_sdk::cbor::to_vec(()).unwrap()),
+        //     ]))
+        // },
+        "core.CallDataPublicKey" => {
+            // Simulate calldata public key request
+            Ok(ethabi::encode(&[
+                Token::Uint(0.into()),    // Success status
+                Token::Bytes(vec![])      // Empty response
+            ]))
+        },
+        _ => {
+            // Unknown method
+            Ok(ethabi::encode(&[
+                Token::Uint(1.into()),        // Error status
+                Token::Bytes("unknown".into()) // Module name
+            ]))
+        }
+    }
+}
+
+fn handle_core_calldata_public_key(input: &[u8]) -> Result<Vec<u8>, String> {
+    // Return a mock key structure as CBOR map
+    let mock_key = hex::decode(
+        "a26363666f6f686368656366756D686578706972655473696F6E1B000000017853E2879E"
+    ).unwrap();
+    
+    Ok(mock_key)
+}
+
+fn handle_core_current_epoch(_input: &[u8]) -> Result<Vec<u8>, String> {
+    // Return a mock epoch as CBOR uint
+    let mock_epoch = hex::decode("1a000004d2").unwrap(); // CBOR encoded 1234
+    Ok(mock_epoch)
+}
+
+fn handle_rofl_is_authorized_origin(input: &[u8]) -> Result<Vec<u8>, String> {
+    // Decode appId (21 bytes prefixed with 0x55)
+    if input.len() != 22 || input[0] != 0x55 {
+        return Err("invalid input format".into());
+    }
+
+    // For testing, always return true (0xf5 in CBOR)
+    Ok(vec![0xf5])
+}
+
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
@@ -223,6 +345,12 @@ fn main() {
         "keypair_generate" => handle_keypair_generate(&input),
         "sign" => handle_sign(&input),
         "verify" => handle_verify(&input),
+        "gas_used" => handle_gas_used(&input),
+        "pad_gas" => handle_pad_gas(&input),
+        "subcall" => handle_subcall(&input),
+        "core_calldata_public_key" => handle_core_calldata_public_key(&input),
+        "core_current_epoch" => handle_core_current_epoch(&input),
+        "rofl_is_authorized_origin" => handle_rofl_is_authorized_origin(&input),
         _ => Err("Unknown precompile".into()),
     };
 

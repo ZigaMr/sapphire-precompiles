@@ -25,16 +25,28 @@ contract Precompiles {
     
     // Curve25519 Compute Public
     address public constant CURVE25519_COMPUTE_PUBLIC = 0x0100000000000000000000000000000000000008;
+
+    address internal constant GAS_USED = 0x0100000000000000000000000000000000000009;
+    
+    address internal constant PAD_GAS = 0x010000000000000000000000000000000000000a;
     
     // Oasis-specific, general precompiles
-    address public constant SHA512_256 =
-        0x0100000000000000000000000000000000000101;
-    address public constant SHA512 =
-        0x0100000000000000000000000000000000000102;
-    address public constant SHA384 =
-        0x0100000000000000000000000000000000000104;
+    address public constant SHA512_256 = 0x0100000000000000000000000000000000000101;
+    address public constant SHA512 = 0x0100000000000000000000000000000000000102;
+    address public constant SHA384 = 0x0100000000000000000000000000000000000104;
 
     /// Address of the SUBCALL precompile
-    address public constant SUBCALL =
-        0x0100000000000000000000000000000000000103;
+    address public constant SUBCALL = 0x0100000000000000000000000000000000000103;
+    // Consensus
+    string public constant CONSENSUS_DELEGATE = "consensus.Delegate";
+    string public constant CONSENSUS_UNDELEGATE = "consensus.Undelegate";
+    string public constant CONSENSUS_WITHDRAW = "consensus.Withdraw";
+    string public constant CONSENSUS_TAKE_RECEIPT = "consensus.TakeReceipt";
+    // Accounts
+    string public constant ACCOUNTS_TRANSFER = "accounts.Transfer";
+    // Core
+    string public constant CORE_CALLDATAPUBLICKEY = "core.CallDataPublicKey";
+    string public constant CORE_CURRENT_EPOCH = "core.CurrentEpoch";
+    // ROFL
+    string public constant ROFL_IS_AUTHORIZED_ORIGIN = "rofl.IsAuthorizedOrigin";
 }

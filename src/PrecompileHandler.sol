@@ -16,6 +16,12 @@ contract PrecompileHandler is Precompiles {
     bytes4 constant KEYPAIR_GENERATE_SIG = bytes4(keccak256("keypair_generate(uint256,bytes)"));
     bytes4 constant SIGN_SIG = bytes4(keccak256("sign(uint256,bytes,bytes,bytes)"));
     bytes4 constant VERIFY_SIG = bytes4(keccak256("verify(uint256,bytes,bytes,bytes,bytes)"));
+    bytes4 constant GAS_USED_SIG = bytes4(keccak256("gas_used()"));
+    bytes4 constant PAD_GAS_SIG = bytes4(keccak256("pad_gas(uint128)"));
+    bytes4 constant SUBCALL_SIG = bytes4(keccak256("subcall(string,bytes)"));
+    bytes4 constant CORE_CALLDATAPUBLICKEY_SIG = bytes4(keccak256("core_calldata_public_key()"));
+    bytes4 constant CORE_CURRENT_EPOCH_SIG = bytes4(keccak256("core_current_epoch()"));
+    bytes4 constant ROFL_IS_AUTHORIZED_ORIGIN_SIG = bytes4(keccak256("rofl_is_authorized_origin(bytes21)"));
 
     constructor() {
         vm.etch(RANDOM_BYTES, proxyTo(RANDOM_BYTES_SIG));
@@ -41,6 +47,24 @@ contract PrecompileHandler is Precompiles {
         
         vm.etch(VERIFY, proxyTo(VERIFY_SIG));
         vm.label(VERIFY, "VERIFY");
+
+        vm.etch(GAS_USED, proxyTo(GAS_USED_SIG));
+        vm.label(GAS_USED, "GAS_USED");
+        
+        vm.etch(PAD_GAS, proxyTo(PAD_GAS_SIG));
+        vm.label(PAD_GAS, "PAD_GAS");
+
+        vm.etch(SUBCALL, proxyTo(SUBCALL_SIG));
+        vm.label(SUBCALL, "SUBCALL");
+
+        vm.etch(address(bytes20(keccak256(bytes(CORE_CALLDATAPUBLICKEY)))), proxyTo(CORE_CALLDATAPUBLICKEY_SIG));
+        vm.label(address(bytes20(keccak256(bytes(CORE_CALLDATAPUBLICKEY)))), "CORE_CALLDATAPUBLICKEY");
+        
+        vm.etch(address(bytes20(keccak256(bytes(CORE_CURRENT_EPOCH)))), proxyTo(CORE_CURRENT_EPOCH_SIG));
+        vm.label(address(bytes20(keccak256(bytes(CORE_CURRENT_EPOCH)))), "CORE_CURRENT_EPOCH");
+        
+        vm.etch(address(bytes20(keccak256(bytes(ROFL_IS_AUTHORIZED_ORIGIN)))), proxyTo(ROFL_IS_AUTHORIZED_ORIGIN_SIG));
+        vm.label(address(bytes20(keccak256(bytes(ROFL_IS_AUTHORIZED_ORIGIN)))), "ROFL_IS_AUTHORIZED_ORIGIN");
     }
 
     function random_bytes(uint256 numBytes, bytes calldata pers) public returns (bytes memory) {
@@ -83,12 +107,14 @@ contract PrecompileHandler is Precompiles {
         return vm.ffi(inputs);
     }
 
-    function keypair_generate(uint256 sigType, bytes calldata seed) public returns (bytes memory) {
+    function keypair_generate(uint256 sigType, bytes calldata seed) public returns (bytes memory, bytes memory) {
         bytes memory params = abi.encode(sigType, seed);
         string[] memory inputs = new string[](2);
         inputs[0] = "src/precompiles/target/release/keypair_generate";
         inputs[1] = vm.toString(params);
-        return vm.ffi(inputs);
+        bytes memory result = vm.ffi(inputs);
+        return abi.decode(result, (bytes, bytes));
+
     }
 
     function sign(uint256 sigType, bytes calldata privateKey, bytes calldata context, bytes calldata message) public returns (bytes memory) {
@@ -106,6 +132,51 @@ contract PrecompileHandler is Precompiles {
         inputs[1] = vm.toString(params);
         bytes memory result = vm.ffi(inputs);
         return abi.decode(result, (bool));
+    }
+
+
+    function gas_used() public returns (uint128) {
+        string[] memory inputs = new string[](2);
+        inputs[0] = "src/precompiles/target/release/gas_used";
+        inputs[1] = vm.toString(bytes(""));
+        bytes memory result = vm.ffi(inputs);
+        return uint128(abi.decode(result, (uint256)));
+    }
+
+    function pad_gas(uint128 target) public {
+        string[] memory inputs = new string[](2);
+        inputs[0] = "src/precompiles/target/release/pad_gas";
+        inputs[1] = vm.toString(abi.encode(target));
+        vm.ffi(inputs);
+    }
+
+    function subcall(string calldata method, bytes calldata body) public returns (bytes memory) {
+        bytes memory params = abi.encode(method, body);
+        string[] memory inputs = new string[](2);
+        inputs[0] = "src/precompiles/target/release/subcall";
+        inputs[1] = vm.toString(params);
+        return vm.ffi(inputs);
+    }
+    
+    function core_calldata_public_key() public returns (bytes memory) {
+        string[] memory inputs = new string[](2);
+        inputs[0] = "src/precompiles/target/release/core_calldata_public_key";
+        inputs[1] = vm.toString(abi.encodePacked(hex"f6"));
+        return vm.ffi(inputs);
+    }
+
+    function core_current_epoch() public returns (bytes memory) {
+        string[] memory inputs = new string[](2);
+        inputs[0] = "src/precompiles/target/release/core_current_epoch";
+        inputs[1] = vm.toString(abi.encodePacked(hex"f6"));
+        return vm.ffi(inputs);  
+    }
+
+    function rofl_is_authorized_origin(bytes21 appId) public returns (bytes memory) {
+        string[] memory inputs = new string[](2);
+        inputs[0] = "src/precompiles/target/release/rofl_is_authorized_origin";
+        inputs[1] = vm.toString(abi.encodePacked(hex"55", appId)); 
+        return vm.ffi(inputs);
     }
 
   function proxyTo(bytes4 sig) internal view returns (bytes memory) {

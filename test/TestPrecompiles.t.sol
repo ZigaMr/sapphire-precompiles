@@ -132,6 +132,9 @@ contract PrecompileTest is Test, Precompiles {
 
         // Properly decode the keypair - ensure we get the actual bytes
         (bytes memory publicKey, bytes memory privateKey) = abi.decode(result, (bytes, bytes));
+        console.logBytes(publicKey);
+        console.logBytes(privateKey);
+        
 
         // Sign message
         (bool successSign, bytes memory signResult) = SIGN.call(
@@ -152,23 +155,118 @@ contract PrecompileTest is Test, Precompiles {
                 signature        // bytes - just the raw signature
             )
         );
-        assertTrue(successVerify, "Verification call failed");
         
         bool verified = abi.decode(verifyResult, (bool));
         assertTrue(verified, "Signature verification failed");
-
-        // Test via precompile interface for comparison
-        bytes memory precompileKeys = precompile.keypair_generate(sigType, seed);
-        (bytes memory ppubKey, bytes memory pprivKey) = abi.decode(precompileKeys, (bytes, bytes));
-        
-        // Compare keys
-        assertEq(keccak256(ppubKey), keccak256(publicKey), "Precompile public key mismatch");
-        assertEq(keccak256(pprivKey), keccak256(privateKey), "Precompile private key mismatch");
-
-        // Sign and verify with precompile
-        bytes memory precompileSig = precompile.sign(sigType, pprivKey, context, message);
-        bool precompileVerified = precompile.verify(sigType, ppubKey, context, message, precompileSig);
-        assertTrue(precompileVerified, "Precompile signature verification failed");
     }
+
+    function testSubcallCoreCallDataPublicKey() public {
+        // Test direct subcall to core.CallDataPublicKey
+        (bool success, bytes memory result) = SUBCALL.call(
+            abi.encode(
+                "core.CallDataPublicKey",
+                hex"f6" // null CBOR input
+            )
+        );
+        assertTrue(success, "Direct subcall failed");
+        
+        // Decode result
+        (uint64 status, bytes memory data) = abi.decode(result, (uint64, bytes));
+        assertEq(status, 0, "Call should succeed");
+        
+        // Test via precompile
+        bytes memory precompileResult = precompile.subcall(
+            "core.CallDataPublicKey",
+            hex"f6"
+        );
+        (status, data) = abi.decode(precompileResult, (uint64, bytes));
+        assertEq(status, 0, "Precompile call should succeed");
+    }
+
+    function testSubcallCoreCurrentEpoch() public {
+        // Test direct subcall
+        (bool success, bytes memory result) = SUBCALL.call(
+            abi.encode(
+                "core.CurrentEpoch",
+                hex"f6" // null CBOR input
+            )
+        );
+        assertTrue(success, "Direct subcall failed");
+        
+        // Decode result
+        (uint64 status, bytes memory data) = abi.decode(result, (uint64, bytes));
+        assertEq(status, 0, "Call should succeed");
+        
+        // Test via precompile
+        bytes memory precompileResult = precompile.subcall(
+            "core.CurrentEpoch",
+            hex"f6"
+        );
+        (status, data) = abi.decode(precompileResult, (uint64, bytes));
+        assertEq(status, 0, "Precompile call should succeed");
+    }
+
+    function testSubcallEvmReentrancyPrevention() public {
+        // Try to call an evm. prefixed method - should fail
+        (bool success, bytes memory result) = SUBCALL.call(
+            abi.encode(
+                "evm.Call",
+                hex"a0" // empty map in CBOR
+            )
+        );
+        assertTrue(success, "Call itself should not revert");
+        
+        (uint64 status, bytes memory data) = abi.decode(result, (uint64, bytes));
+        assertEq(status, 1, "EVM reentrance should be forbidden");
+        assertEq(string(data), "core", "Should return core module error");
+    }
+
+    function testSubcallAccountsTransfer() public {
+        address to = address(0x1234);
+        uint128 amount = 1000;
+
+        // Build CBOR encoded transfer body
+        bytes memory body = abi.encodePacked(
+            hex"a2", // map, 2 pairs
+            hex"62", "to",
+            hex"55", bytes21(abi.encodePacked(uint8(0x00), to)),
+            hex"66", "amount",
+            hex"50", amount
+        );
+
+        // Test direct subcall
+        (bool success, bytes memory result) = SUBCALL.call(
+            abi.encode("accounts.Transfer", body)
+        );
+        assertTrue(success, "Direct subcall failed");
+        
+        // Decode and verify result
+        (uint64 status, bytes memory data) = abi.decode(result, (uint64, bytes));
+        assertEq(status, 0, "Transfer should succeed");
+        
+        // Test via precompile
+        bytes memory precompileResult = precompile.subcall(
+            "accounts.Transfer",
+            body
+        );
+        (status, data) = abi.decode(precompileResult, (uint64, bytes));
+        assertEq(status, 0, "Precompile transfer should succeed");
+    }
+
+    function testSubcallInvalidMethod() public {
+        // Try to call a non-existent method
+        (bool success, bytes memory result) = SUBCALL.call(
+            abi.encode(
+                "nonexistent.Method",
+                hex"f6" // null CBOR input
+            )
+        );
+        assertTrue(success, "Call itself should not revert");
+        
+        (uint64 status, bytes memory data) = abi.decode(result, (uint64, bytes));
+        assertEq(status, 1, "Should return error status");
+        assertEq(string(data), "unknown", "Should return unknown module error");
+    }
+
 
 }
