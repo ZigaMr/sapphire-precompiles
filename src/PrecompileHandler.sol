@@ -151,7 +151,9 @@ contract PrecompileHandler is Precompiles {
     }
 
     function subcall(string calldata method, bytes calldata body) public returns (bytes memory) {
-        bytes memory params = abi.encode(method, body);
+        uint256 blockNumber = uint256(vm.getBlockNumber());
+        bytes32 privateKey = 0x1234567890123456789012345678901234567890123456789012345678901234;
+        bytes memory params = abi.encode(blockNumber, method, body, privateKey);
         string[] memory inputs = new string[](2);
         inputs[0] = "src/precompiles/target/release/subcall";
         inputs[1] = vm.toString(params);
