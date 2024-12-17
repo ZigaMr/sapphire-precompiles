@@ -3,28 +3,29 @@ use ethabi::{ParamType, Token};
 use rand::Rng;
 use hex;
 use x25519_dalek; 
-use ed25519_dalek;
+use hmac::{Hmac, Mac};
+use sha2::Sha512_256;
 use std::{env, process};
 use oasis_cbor;
+
 use oasis_runtime_sdk::{
     core::common::{
         crypto::{
             mrae::deoxysii::{DeoxysII, KEY_SIZE, NONCE_SIZE},
-            signature::{Signature, PublicKey as SignaturePublicKey},
+            signature::{Signature, PublicKey as SignaturePublicKey, PrivateKey},
             x25519,
         },
-        namespace::{Namespace, NAMESPACE_SIZE},
+        namespace::{Namespace},
     },
     crypto::signature::{SignatureType, MemorySigner}, // Direct MemorySigner import
 };
 pub use oasis_core_keymanager::{
     api::KeyManagerError,
-    crypto::{KeyPair, KeyPairId, SignedPublicKey, StateKey, KEY_PAIR_ID_SIZE},
-    policy::TrustedSigners, 
+    crypto::{kdf::Kdf, KeyPair, KeyPairId, SignedPublicKey, StateKey, KEY_PAIR_ID_SIZE},
+    policy::TrustedSigners,
 };
-use oasis_core_runtime::common::crypto::signature::{self, Signer};
-use hmac::{Hmac, Mac};
-use sha2::Sha512_256;
+use oasis_core_runtime::common::crypto::signature::{Signer};
+use oasis_core_runtime::consensus::beacon::EpochTime;
 
 const WORD: usize = 32;
 
@@ -33,14 +34,14 @@ pub struct CallDataPublicKeyQueryResponse {
     pub public_key: SignedPublicKey,
     pub epoch: u64,
 }
-pub struct PrivateKey(pub ed25519_dalek::SigningKey);
+// pub struct PrivateKey(pub ed25519_dalek::SigningKey);
 
-impl PrivateKey {
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&bytes);
-        PrivateKey(signing_key)
-    }
-}
+// impl PrivateKey {
+//     pub fn from_bytes(bytes: [u8; 32]) -> Self {
+//         let signing_key = ed25519_dalek::SigningKey::from_bytes(&bytes);
+//         PrivateKey(signing_key)
+//     }
+// }
 
 const PUBLIC_KEY_SIGNATURE_CONTEXT: &[u8] = b"oasis-core/keymanager: pk signature";
 
@@ -75,7 +76,7 @@ fn handle_random_bytes(input: &[u8]) -> Result<Vec<u8>, String> {
         input,
     ).map_err(|e| e.to_string())?;
 
-    let pers_str = call_args[1].clone().into_bytes().unwrap();
+    // let pers_str = call_args[1].clone().into_bytes().unwrap();
     let num_bytes: u64 = call_args[0].clone().into_uint().unwrap().try_into().unwrap_or(u64::MAX);
 
     let mut rng = rand::thread_rng();
@@ -302,19 +303,33 @@ fn handle_subcall(input: &[u8]) -> Result<Vec<u8>, String> {
             if body != vec![0xf6] {  // Check for CBOR null
                 return Err("invalid body format".into());
             }
-
-            let mut signed_public_key = SignedPublicKey::default();
-            // Convert Vec<u8> to [u8; 32]
-            let key_bytes = call_args[3].clone().into_fixed_bytes().unwrap();
-            let mut array = [0u8; 32];
-            array.copy_from_slice(&key_bytes);
             
-            let private_key = x25519::PrivateKey::from(array);
-            let public_key = private_key.public_key();
-            signed_public_key.key = public_key;
+            let sk_bytes = call_args[3].clone().into_fixed_bytes().unwrap();
+            let sk = PrivateKey::from_bytes(sk_bytes.clone());
+            let sk_arc = Arc::new(sk);
+            
+            let mut secret_bytes = [0u8; 32];
+            secret_bytes.copy_from_slice(&sk_bytes[..32]);
+            let x25519_secret = x25519_dalek::StaticSecret::from(secret_bytes);
+            let x25519_public = x25519_dalek::PublicKey::from(&x25519_secret);
+            
+            let key = x25519::PublicKey::from(x25519_public);
+            let checksum = [1u8; 32].to_vec();
+            let runtime_id = Namespace::from(vec![1u8; 32]);
+            let key_pair_id = KeyPairId::from(vec![1u8; 32]);
+            let signer: Arc<dyn Signer> = sk_arc;
+    
+            let signed_public_key = SignedPublicKey::new(
+                key,
+                checksum,
+                runtime_id,
+                key_pair_id,
+                Some(EpochTime::from(epoch)),
+                &signer,
+            ).map_err(|e| e.to_string())?;
 
             let response = CallDataPublicKeyQueryResponse {
-                public_key: signed_public_key,
+                public_key: SignedPublicKey::from(signed_public_key),
                 epoch: epoch,
             };
 
@@ -376,9 +391,6 @@ fn main() {
         "gas_used" => handle_gas_used(&input),
         "pad_gas" => handle_pad_gas(&input),
         "subcall" => handle_subcall(&input),
-        "core_calldata_public_key" => handle_core_calldata_public_key(&input),
-        "core_current_epoch" => handle_core_current_epoch(&input),
-        "rofl_is_authorized_origin" => handle_rofl_is_authorized_origin(&input),
         _ => Err("Unknown precompile".into()),
     };
 
