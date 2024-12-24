@@ -37,6 +37,8 @@ contract Precompiles {
 
     /// Address of the SUBCALL precompile
     address public constant SUBCALL = 0x0100000000000000000000000000000000000103;
+    
+    // METHODS:
     // Consensus
     string public constant CONSENSUS_DELEGATE = "consensus.Delegate";
     string public constant CONSENSUS_UNDELEGATE = "consensus.Undelegate";
@@ -47,6 +49,7 @@ contract Precompiles {
     // Core
     string public constant CORE_CALLDATAPUBLICKEY = "core.CallDataPublicKey";
     string public constant CORE_CURRENT_EPOCH = "core.CurrentEpoch";
+    string public constant OASIS_CALLDATAPUBLICKEY = "oasis_callDataPublicKey";
     // ROFL
     string public constant ROFL_IS_AUTHORIZED_ORIGIN = "rofl.IsAuthorizedOrigin";
 }

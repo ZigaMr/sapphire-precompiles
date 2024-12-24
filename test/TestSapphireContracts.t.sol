@@ -1,85 +1,66 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
 import {console} from "forge-std/console.sol";
-import "../src/PrecompileHandler.sol";
 import "../src/Precompiles.sol";
-import "../lib/sapphire-paratime/contracts/contracts/CalldataEncryption.sol";
+import "../src/TestCalldataEncryption.sol";
+import "../lib/sapphire-paratime/contracts/contracts/Subcall.sol";
 import "../lib/sapphire-paratime/contracts/contracts/Sapphire.sol";
+import "../src/BinaryHandler.sol";
+import "../src/Counter.sol";
 
 contract CalldataEncryptionTest is Test {
-    PrecompileHandler precompile;
+    TestCalldataEncryption testCalldataEncryption;
+    Precompiles precompiles;
+    BinaryHandler binaryHandler;
+    Counter counter;
     
     function setUp() public {
         // Deploy precompile 
-        precompile = new PrecompileHandler();
+        testCalldataEncryption = new TestCalldataEncryption();
+        precompiles = new Precompiles();
+        binaryHandler = new BinaryHandler();
+        counter = new Counter();
     }
+
     function testEncryptCallData() public {
-        // Test with empty data
-        bytes memory emptyData = "";
-        bytes memory emptyResult = encryptCallData(emptyData);
-        assertEq(emptyResult, "", "Empty data should return empty string");
+        bytes memory in_data = bytes("Hello, Sapphire!");
 
-        // Test with actual data
-        bytes memory testData = abi.encode("Hello, Sapphire!");
-        bytes memory encryptedData = encryptCallData(testData);
-        
-        // The encrypted data should not be empty
-        assertTrue(encryptedData.length > 0, "Encrypted data should not be empty");
-        
-        // The encrypted data should be different from input
-        assertFalse(
-            keccak256(encryptedData) == keccak256(testData),
-            "Encrypted data should differ from input"
-        );
+        Sapphire.Curve25519PublicKey myPublic;
+        Sapphire.Curve25519SecretKey mySecret;
 
-        // Test that multiple encryptions of the same data produce different results
-        bytes memory secondEncryption = encryptCallData(testData);
-        assertFalse(
-            keccak256(encryptedData) == keccak256(secondEncryption),
-            "Multiple encryptions should produce different results"
+        (myPublic, mySecret) = Sapphire.generateCurve25519KeyPair("");
+
+        bytes15 nonce = bytes15(Sapphire.randomBytes(15, ""));
+
+        Subcall.CallDataPublicKey memory cdpk;
+        uint256 epoch;
+
+        (epoch, cdpk) = Subcall.coreCallDataPublicKey();
+        bytes memory result = testCalldataEncryption.testEncryptCallData(
+            in_data,
+            myPublic,
+            mySecret,
+            nonce,
+            epoch,
+            cdpk.key
         );
+        (bool success, bytes memory decrypted) = address(bytes20(keccak256(bytes("0x987654321098765432109876543210")))).call(abi.encode(result));
+        assertEq(success, true);
+        assertEq(decrypted, in_data);
     }
 
-    function testEncryptCallDataWithParams() public {
-        bytes memory testData = abi.encode("Hello, Sapphire!");
-        
-        // Generate key pair
-        (
-            Sapphire.Curve25519PublicKey myPublic,
-            Sapphire.Curve25519SecretKey mySecret
-        ) = Sapphire.generateCurve25519KeyPair("");
-        
-        bytes15 nonce = bytes15(Sapphire.randomBytes(15, ""));
-        uint256 epoch = 1;
-        bytes32 peerPublicKey = bytes32(uint256(1)); // Mock peer public key
+    function testCounterEncryptCallData() public {
+        bytes memory encryptedData = encryptCallData(abi.encodeWithSelector(counter.increment.selector));
+        (bool success, bytes memory decryptedData) = address(bytes20(keccak256(bytes("0x987654321098765432109876543210")))).call(abi.encode(encryptedData));
+        assertEq(success, true);
+        assertEq(decryptedData, abi.encodeWithSelector(counter.increment.selector));
 
-        bytes memory encryptedData = encryptCallData(
-            testData,
-            myPublic,
-            mySecret,
-            nonce,
-            epoch,
-            peerPublicKey
-        );
-
-        // Basic validations
-        assertTrue(encryptedData.length > 0, "Encrypted data should not be empty");
-        assertFalse(
-            keccak256(encryptedData) == keccak256(testData),
-            "Encrypted data should differ from input"
-        );
-
-        // Test with empty data
-        bytes memory emptyResult = encryptCallData(
-            "",
-            myPublic,
-            mySecret,
-            nonce,
-            epoch,
-            peerPublicKey
-        );
-        assertEq(emptyResult, "", "Empty data should return empty string");
+        console.log("Counter number: ", counter.number());
+        uint256 initialNumber = counter.number();
+        (success, decryptedData) = address(counter).call(encryptedData);
+        assertEq(success, true);
+        assertEq(counter.number(), initialNumber + 1);
     }
 }

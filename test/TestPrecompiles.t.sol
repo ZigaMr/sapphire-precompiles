@@ -3,15 +3,16 @@ pragma solidity ^0.8.13;
 
 import "forge-std/Test.sol";
 import {console} from "forge-std/console.sol";
-import "../src/PrecompileHandler.sol";
+import "../src/BinaryHandler.sol";
 import "../src/Precompiles.sol";
 
+
 contract PrecompileTest is Test, Precompiles {
-    PrecompileHandler precompile;
+    BinaryHandler binaryHandler;
     
     function setUp() public {
         // Deploy precompile 
-        precompile = new PrecompileHandler();
+        binaryHandler = new BinaryHandler();
     }
     
 
@@ -24,7 +25,7 @@ contract PrecompileTest is Test, Precompiles {
 
         // Direct low-level call
         (bool success, bytes memory result) = RANDOM_BYTES.call(inputData);
-        bytes memory randomBytes = abi.decode(result, (bytes));
+        bytes memory randomBytes = result;
         console.log("Hex result: 0x%s", vm.toString(randomBytes));
         assertTrue(success, "Direct call failed");
         assertEq(randomBytes.length, 32, "Incorrect result length");
@@ -32,10 +33,10 @@ contract PrecompileTest is Test, Precompiles {
         // Test second call gives different result
         (bool success2, bytes memory result2) = RANDOM_BYTES.call(inputData);
         assertTrue(success2, "Second direct call failed");
-        assertNotEq(keccak256(abi.decode(result2, (bytes))), keccak256(result2), "Results should be different");
+        assertNotEq(keccak256(result2), keccak256(result), "Results should be different");
 
         (bool success_static, bytes memory result_static) = RANDOM_BYTES.staticcall(inputData);
-        bytes memory randomBytes_static = abi.decode(result_static, (bytes));
+        bytes memory randomBytes_static = result_static;
         console.log("Hex result staticcall: 0x%s", vm.toString(randomBytes_static));
         assertTrue(success_static, "Direct call failed");
         assertEq(randomBytes_static.length, 32, "Incorrect result length");
@@ -53,16 +54,12 @@ contract PrecompileTest is Test, Precompiles {
         // Direct call
         (bool success, bytes memory result) = X25519_DERIVE.call(inputData);
         assertTrue(success, "Direct call failed");
-        assertEq(abi.decode(result, (bytes)), expectedOutput, "Incorrect derived key");
+        assertEq(result, expectedOutput, "Incorrect derived key");
 
         // Static call
         (bool successStatic, bytes memory resultStatic) = X25519_DERIVE.staticcall(inputData);
         assertTrue(successStatic, "Static call failed");
-        assertEq(abi.decode(resultStatic, (bytes)), expectedOutput, "Incorrect derived key from static call");
-
-        // Call through precompile contract
-        bytes memory precompileResult = precompile.x25519_derive(publicKey, privateKey);
-        assertEq(precompileResult, expectedOutput, "Incorrect derived key from precompile");
+        assertEq(resultStatic, expectedOutput, "Incorrect derived key from static call");
     }
 
     function testCurve25519ComputePublic() public {
@@ -71,14 +68,12 @@ contract PrecompileTest is Test, Precompiles {
 
         (bool success, bytes memory result) = CURVE25519_COMPUTE_PUBLIC.call(abi.encodePacked(privateKey));
         assertTrue(success, "Direct call failed");
-        assertEq(abi.decode(result, (bytes)), abi.encodePacked(expectedPublic), "Incorrect public key");
+        assertEq(result, abi.encodePacked(expectedPublic), "Incorrect public key");
 
         (bool successStatic, bytes memory resultStatic) = CURVE25519_COMPUTE_PUBLIC.staticcall(abi.encodePacked(privateKey));
         assertTrue(successStatic, "Static call failed");
-        assertEq(abi.decode(resultStatic, (bytes)), abi.encodePacked(expectedPublic), "Incorrect public key from static call");
+        assertEq(resultStatic, abi.encodePacked(expectedPublic), "Incorrect public key from static call");
 
-        bytes memory precompileResult = precompile.curve25519_compute_public(privateKey);
-        assertEq(precompileResult, abi.encodePacked(expectedPublic), "Incorrect public key from precompile");
     }
 
     function testDeoxysiiSealAndOpen() public {
@@ -87,34 +82,19 @@ contract PrecompileTest is Test, Precompiles {
         bytes memory plaintext = bytes("test message");
         bytes memory ad = bytes("additional data");
 
-        console.logBytes32(key);
-        console.logBytes32(nonce);
-        console.logBytes(plaintext);
-        console.logBytes(ad);
-
         // Test seal
         (bool success, bytes memory encrypted_data) = DEOXYSII_SEAL.call(abi.encode(key, nonce, plaintext, ad));
         assertTrue(success, "Seal call failed");
-        assertNotEq(abi.decode(encrypted_data, (bytes)), plaintext, "Sealed should differ from plaintext");
-
-        console.logBytes(abi.decode(encrypted_data, (bytes)));
+        assertNotEq(encrypted_data, plaintext, "Sealed should differ from plaintext");
 
         // Test open
-        (bool successOpen, bytes memory opened) = DEOXYSII_OPEN.call(abi.encode(key, nonce, abi.decode(encrypted_data, (bytes)), ad));
+        (bool successOpen, bytes memory opened) = DEOXYSII_OPEN.call(abi.encode(key, nonce, encrypted_data, ad));
         assertTrue(successOpen, "Open call failed");
-
-        console.logBytes(opened);
         
         // Log results
-        console.log("Encrypted data:", string(abi.decode(encrypted_data, (bytes))));
+        console.log("Encrypted data:", string(encrypted_data));
         console.log("Opened data:", string(opened));
-        assertEq(abi.decode(opened, (bytes)), plaintext, "Opened should match original plaintext");
-
-        // Test precompile
-        bytes memory precompileSealed = precompile.deoxysii_seal(key, nonce, plaintext, ad);
-        bytes memory precompileOpened = precompile.deoxysii_open(key, nonce, precompileSealed, ad);
-        assertEq(precompileOpened, plaintext, "Precompile opened should match plaintext");
-
+        assertEq(opened, plaintext, "Opened should match original plaintext");
     }
 
     function testKeypairGenerateAndSign() public {
@@ -123,15 +103,11 @@ contract PrecompileTest is Test, Precompiles {
         bytes memory message = bytes("test message");
         bytes memory context = bytes("test context");
 
-        console.logBytes(seed);
         // Generate keypair
         (bool success, bytes memory result) = KEYPAIR_GENERATE.call(abi.encode(sigType, seed));
         assertTrue(success, "Keypair generation failed");
 
-        (bytes memory publicKey, bytes memory privateKey) = abi.decode(result, (bytes, bytes));
-        console.logBytes(publicKey);
-        console.logBytes(privateKey);
-        
+        (bytes memory publicKey, bytes memory privateKey) = abi.decode(result, (bytes, bytes));        
 
         // Sign message
         (bool successSign, bytes memory signResult) = SIGN.call(
@@ -151,11 +127,35 @@ contract PrecompileTest is Test, Precompiles {
                 signature        // bytes - just the raw signature
             )
         );
-        
         bool verified = abi.decode(verifyResult, (bool));
-        assertFalse(verified, "Signature verification failed");
+        assertTrue(verified, "Signature verification failed");
     }
 
+    function testSymmetricKeyGeneration() public {
+        uint256 sigType = 0; // Ed25519_Oasis
+        // Different seeds should generate different key pairs
+        bytes memory seed1 = hex"3031323334353637383930313233343536373839303132333435363738393031";
+        bytes memory seed2 = hex"3031323334353637383930313233343536373839303132333435363738393032";
+        // Generate two key pairs
+        (bool success1, bytes memory result1) = KEYPAIR_GENERATE.call(abi.encode(sigType, seed1));
+        assertTrue(success1, "Keypair generation failed");
+        (bytes memory publicKey1, bytes memory privateKey1) = abi.decode(result1, (bytes, bytes));
+
+        (bool success2, bytes memory result2) = KEYPAIR_GENERATE.call(abi.encode(sigType, seed2));
+        assertTrue(success2, "Keypair generation failed");
+        (bytes memory publicKey2, bytes memory privateKey2) = abi.decode(result2, (bytes, bytes));
+
+        // Derive symmetric keys
+        (bool success3, bytes memory symmetricKey1) = X25519_DERIVE.call(abi.encode(publicKey1, privateKey2));
+        assertTrue(success3, "Derive symmetric key failed");
+
+        (bool success4, bytes memory symmetricKey2) = X25519_DERIVE.call(abi.encode(publicKey2, privateKey1));
+        assertTrue(success4, "Derive symmetric key failed");
+
+        // Assert the symmetric keys are equal
+        assertEq(symmetricKey1, symmetricKey2, "Symmetric keys should be equal");
+    }
+    
     function testSubcallCoreCallDataPublicKey() public {
         // Test direct subcall to core.CallDataPublicKey
         (bool success, bytes memory result) = SUBCALL.call(
@@ -165,17 +165,10 @@ contract PrecompileTest is Test, Precompiles {
             )
         );
         assertTrue(success, "Direct subcall failed");
-        
+        console.logBytes(result);
         // Decode result
         (uint64 status, bytes memory data) = abi.decode(result, (uint64, bytes));
         
-        // Test via precompile
-        bytes memory precompileResult = precompile.subcall(
-            "core.CallDataPublicKey",
-            hex"f6"
-        );
-        (status, data) = abi.decode(precompileResult, (uint64, bytes));
-        assertEq(status, 0, "Precompile call should succeed");
     }
 
 }

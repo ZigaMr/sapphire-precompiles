@@ -17,7 +17,23 @@ use oasis_runtime_sdk::{
         },
         namespace::{Namespace},
     },
-    crypto::signature::{SignatureType, MemorySigner}, // Direct MemorySigner import
+    context::Context,
+    core::common::crypto::mrae::deoxysii,
+    // crypto::signature::context::get_chain_context_for,
+    crypto::signature::{
+        self,
+        context::get_chain_context_for,
+        SignatureType,
+        MemorySigner,
+    },
+    keymanager, 
+    module,
+    modules::core::Error,
+    state::CurrentState,
+    types::{
+        transaction::{Call, CallFormat, CallResult},
+        callformat::CallEnvelopeX25519DeoxysII,
+    },
 };
 pub use oasis_core_keymanager::{
     api::KeyManagerError,
@@ -26,7 +42,10 @@ pub use oasis_core_keymanager::{
 };
 use oasis_core_runtime::common::crypto::signature::{Signer};
 use oasis_core_runtime::consensus::beacon::EpochTime;
-
+use evm::{
+    executor::stack::{PrecompileFailure, PrecompileHandle, PrecompileOutput},
+    ExitError, ExitRevert, ExitSucceed,
+};
 const WORD: usize = 32;
 
 #[derive(oasis_cbor::Encode)]
@@ -203,8 +222,10 @@ fn handle_sign(input: &[u8]) -> Result<Vec<u8>, String> {
     Ok(result.into())
 }
 
+
+
 fn handle_verify(input: &[u8]) -> Result<Vec<u8>, String> {
-    let call_args = ethabi::decode(
+    let mut call_args = ethabi::decode(
         &[
             ParamType::Uint(256), // signature type
             ParamType::Bytes,     // public key
@@ -215,27 +236,28 @@ fn handle_verify(input: &[u8]) -> Result<Vec<u8>, String> {
         input,
     ).map_err(|e| e.to_string())?;
 
-    let signature = call_args[4].clone().into_bytes().unwrap();
-    let message = call_args[3].clone().into_bytes().unwrap();
-    let context = call_args[2].clone().into_bytes().unwrap();
-    let pk = call_args[1].clone().into_bytes().unwrap();
-    let method: u8 = call_args[0]
-        .clone()
+    let signature = call_args.pop().unwrap().into_bytes().unwrap();
+    let message = call_args.pop().unwrap().into_bytes().unwrap();
+    let ctx_or_hash = call_args.pop().unwrap().into_bytes().unwrap();
+    let pk = call_args.pop().unwrap().into_bytes().unwrap();
+    let method: u8 = call_args
+        .pop()
+        .unwrap()
         .into_uint()
         .unwrap()
         .try_into()
-        .map_err(|_| "signature type identifier out of bounds")?;
+        .map_err(|_| "signature type identifier out of bounds".to_string())?;
 
     let sig_type: SignatureType = method
         .try_into()
-        .map_err(|_| "unknown signature type")?;
+        .map_err(|_| "unknown signature type".to_string())?;
 
-    let signature: Signature = signature.into();
-    let public_key = SignaturePublicKey::from(pk);
+    let signature: signature::Signature = signature.into();
+    let public_key = signature::PublicKey::from_bytes(sig_type, &pk)
+        .map_err(|e| format!("invalid public key: {}", e))?;
 
-    // let result = public_key.verify(sig_type, &context, &message, &signature);
-    // Ok(ethabi::encode(&[Token::Bool(result.is_ok())]))
-    Ok(ethabi::encode(&[Token::Bool(true)]))
+    let result = public_key.verify_by_type(sig_type, &ctx_or_hash, &message, &signature);
+    Ok(ethabi::encode(&[Token::Bool(result.is_ok())]))
 }
 
 fn handle_gas_used(input: &[u8]) -> Result<Vec<u8>, String> {
@@ -274,7 +296,7 @@ fn handle_pad_gas(input: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 
-fn handle_subcall(input: &[u8]) -> Result<Vec<u8>, String> {
+fn handle_subcall2(input: &[u8]) -> Result<Vec<u8>, String> {
 
     let call_args = ethabi::decode(
         &[
@@ -361,7 +383,276 @@ fn handle_subcall(input: &[u8]) -> Result<Vec<u8>, String> {
     }
 }
 
+#[derive(Decode, Encode)]
+struct ConsensusState {
+    balances: HashMap<Address, u128>,
+    delegations: HashMap<(Address, Address), u128>,
+    undelegations: HashMap<u64, Vec<Undelegation>>,
+    receipts: HashMap<(Address, u64), Receipt>
+}
 
+fn handle_subcall(input: &[u8]) -> Result<Vec<u8>, String> {
+    let call_args = ethabi::decode(
+        &[
+            ParamType::Uint(256), // epoch
+            ParamType::String,    // method
+            ParamType::Bytes,     // body (CBOR)
+            ParamType::FixedBytes(32), // private key
+            ParamType::Bytes,     // consensus state
+        ],
+        &input,
+    ).map_err(|e| e.to_string())?;
+
+    let body = call_args[2].clone().into_bytes().unwrap();
+    let method = String::from_utf8(call_args[1].clone().into_string().unwrap().into_bytes())
+        .map_err(|_| "method is malformed".to_string())?;
+    let epoch = call_args[0].clone().into_uint().unwrap().try_into().unwrap_or(u64::MAX);
+    
+    // Decode state
+    let state_bytes = call_args[4].clone().into_bytes().unwrap();
+    let mut state: ConsensusState = oasis_cbor::from_slice(&state_bytes)
+        .map_err(|e| format!("failed to decode state: {}", e))?;
+
+    let (result, updated_state) = match method.as_str() {
+        "core.CallDataPublicKey" => {
+            if body != vec![0xf6] {  // Check for CBOR null
+                return Err("invalid body format".into());
+            }
+            
+            let sk_bytes = call_args[3].clone().into_fixed_bytes().unwrap();
+            let sk = PrivateKey::from_bytes(sk_bytes.clone());
+            let sk_arc = Arc::new(sk);
+            
+            let mut secret_bytes = [0u8; 32];
+            secret_bytes.copy_from_slice(&sk_bytes[..32]);
+            let x25519_secret = x25519_dalek::StaticSecret::from(secret_bytes);
+            let x25519_public = x25519_dalek::PublicKey::from(&x25519_secret);
+            
+            let key = x25519::PublicKey::from(x25519_public);
+            let checksum = [1u8; 32].to_vec();
+            let runtime_id = Namespace::from(vec![1u8; 32]);
+            let key_pair_id = KeyPairId::from(vec![1u8; 32]);
+            let signer: Arc<dyn Signer> = sk_arc;
+    
+            let signed_public_key = SignedPublicKey::new(
+                key,
+                checksum,
+                runtime_id,
+                key_pair_id,
+                Some(EpochTime::from(epoch)),
+                &signer,
+            ).map_err(|e| e.to_string())?;
+
+            let response = CallDataPublicKeyQueryResponse {
+                public_key: SignedPublicKey::from(signed_public_key),
+                epoch: epoch,
+            };
+
+            let response_bytes = oasis_cbor::to_vec(response);
+
+            Ok(ethabi::encode(&[
+                Token::Uint(0.into()),    // Success status
+                Token::Bytes(response_bytes),
+            ]))
+        },
+ 
+        "core.CurrentEpoch" => {
+            if body != vec![0xf6] {
+                return Err("invalid body format".into()); 
+            }
+ 
+            Ok(ethabi::encode(&[
+                Token::Uint(0.into()),
+                Token::Bytes(epoch.to_be_bytes().to_vec()),
+            ]))
+        },
+
+        "consensus.Delegate" => {
+            let request: DelegateRequest = oasis_cbor::from_slice(&body)
+                .map_err(|e| format!("failed to decode delegate request: {}", e))?;
+
+            // Check balance
+            let balance = state.balances.get(&request.from).unwrap_or(&0);
+            if balance < &request.amount.amount() {
+                return Err("insufficient balance".into());
+            }
+
+            // Update state
+            state.balances.insert(request.from, balance - request.amount.amount());
+            let shares = state.delegations
+                .entry((request.from, request.to))
+                .or_insert(0);
+            *shares += request.amount.amount();
+
+            if request.receipt > 0 {
+                state.receipts.insert(
+                    (request.from, request.receipt),
+                    Receipt {
+                        kind: 1,
+                        shares: *shares,
+                        amount: request.amount.amount(),
+                        epoch,
+                        error: None,
+                    }
+                );
+            }
+
+            (Vec::new(), state)
+        },
+
+        "consensus.Undelegate" => {
+            let request: UndelegateRequest = oasis_cbor::from_slice(&body)
+                .map_err(|e| format!("failed to decode undelegate request: {}", e))?;
+
+            // Check delegation exists
+            let shares = state.delegations
+                .get(&(request.to, request.from))
+                .ok_or("no delegation found")?;
+            if shares < &request.shares {
+                return Err("insufficient shares".into());
+            }
+
+            // Update state
+            state.delegations.insert(
+                (request.to, request.from),
+                shares - request.shares
+            );
+
+            // Queue undelegation
+            let completion_epoch = epoch + 14; // 14 epoch unbonding period
+            state.undelegations.entry(completion_epoch)
+                .or_insert_with(Vec::new)
+                .push(Undelegation {
+                    from: request.from,
+                    to: request.to,
+                    shares: request.shares,
+                    amount: request.shares, // 1:1 for testing
+                });
+
+            if request.receipt > 0 {
+                state.receipts.insert(
+                    (request.to, request.receipt),
+                    Receipt {
+                        kind: 2,
+                        shares: request.shares,
+                        amount: 0,
+                        epoch: completion_epoch,
+                        error: None,
+                    }
+                );
+            }
+
+            let result = ReclaimEscrowResult {
+                debond_end_time: completion_epoch,
+                debonding_shares: request.shares,
+            };
+
+            (oasis_cbor::to_vec(result), state)
+        },
+
+        "consensus.Withdraw" => {
+            let request: WithdrawRequest = oasis_cbor::from_slice(&body)
+                .map_err(|e| format!("failed to decode withdraw request: {}", e))?;
+
+            // Update balances
+            let balance = state.balances.entry(request.from)
+                .or_insert(0);
+            *balance += request.amount.amount();
+
+            (Vec::new(), state)
+        },
+
+        "consensus.TakeReceipt" => {
+            let request: TakeReceiptRequest = oasis_cbor::from_slice(&body)
+                .map_err(|e| format!("failed to decode take receipt request: {}", e))?;
+
+            let receipt = state.receipts.remove(&(request.from, request.id))
+                .ok_or("receipt not found")?;
+
+            (oasis_cbor::to_vec(receipt), state)
+        },
+
+        _ => return Ok(ethabi::encode(&[
+            Token::Uint(1.into()),
+            Token::Bytes("unknown".into())
+        ])),
+    };
+
+    // Encode result and updated state
+    Ok(ethabi::encode(&[
+        Token::Bytes(result),
+        Token::Bytes(oasis_cbor::to_vec(state)),
+    ]))
+}
+
+fn handle_decode(input: &[u8]) -> Result<Vec<u8>, String> {
+    // Add debug prints for input data
+    // println!("Raw input: {}", hex::encode(input));
+    
+    let call_args = ethabi::decode(
+        &[
+            ParamType::Bytes,     // calldata
+            ParamType::FixedBytes(32),     // private key
+        ],
+        input,
+    ).map_err(|e| e.to_string())?;
+    
+    let data = call_args[0].clone().into_bytes().unwrap();
+    let private_key = call_args[1].clone().into_fixed_bytes().unwrap();
+    
+    // Debug print private key
+    // println!("Private key: {}", hex::encode(&private_key));
+    
+    let private_key: [u8; 32] = private_key.try_into()
+        .map_err(|_| "private key must be 32 bytes".to_string())?;
+    let private = x25519_dalek::StaticSecret::from(private_key);
+    
+    // Decode CBOR data
+    let call: Call = oasis_cbor::from_slice(&data)
+        .map_err(|e| format!("failed to decode call: {}", e))?;
+
+    match call.format {
+        CallFormat::Plain => {
+            // Return encoded success with the plain call
+            Ok(ethabi::encode(&[
+                Token::Uint(0.into()),    // Success status
+                Token::Bytes(data),       // Original data
+            ]))
+        },
+
+        CallFormat::EncryptedX25519DeoxysII => {
+            // Method must be empty for encrypted format
+            if !call.method.is_empty() {
+                return Ok(ethabi::encode(&[
+                    Token::Uint(1.into()),    // Error status
+                    Token::String("non-empty method".into())
+                ]));
+            }
+
+            // Decode the envelope
+            let envelope: CallEnvelopeX25519DeoxysII = oasis_cbor::from_value(call.body)
+                .map_err(|_| "bad call envelope")?;
+
+            let decrypted = deoxysii::box_open(
+                    &envelope.nonce,
+                    envelope.data.clone(),
+                    vec![],
+                    &envelope.pk.0,
+                    &private,
+                )
+                .map_err(|_| "decryption failed")?;
+            
+            let inner_call: Call = oasis_cbor::from_slice(&decrypted)
+                .map_err(|_| "invalid inner data")?;
+            let data = match inner_call.body {
+                oasis_cbor::Value::ByteString(data) => data,
+                _ => return Err("invalid inner data".to_string())
+            };
+            // Return decrypted data
+            Ok(data)
+        }
+    }
+}
 
 
 fn main() {
@@ -391,6 +682,7 @@ fn main() {
         "gas_used" => handle_gas_used(&input),
         "pad_gas" => handle_pad_gas(&input),
         "subcall" => handle_subcall(&input),
+        "decode" => handle_decode(&input),
         _ => Err("Unknown precompile".into()),
     };
 

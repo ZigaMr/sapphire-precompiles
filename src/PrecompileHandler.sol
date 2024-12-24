@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.11;
 import "./Precompiles.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {console} from "forge-std/console.sol";
@@ -22,6 +22,9 @@ contract PrecompileHandler is Precompiles {
     bytes4 constant CORE_CALLDATAPUBLICKEY_SIG = bytes4(keccak256("core_calldata_public_key()"));
     bytes4 constant CORE_CURRENT_EPOCH_SIG = bytes4(keccak256("core_current_epoch()"));
     bytes4 constant ROFL_IS_AUTHORIZED_ORIGIN_SIG = bytes4(keccak256("rofl_is_authorized_origin(bytes21)"));
+
+    // Set custom ephemeral private key
+    bytes32 privateKey = 0x1234567890123456789012345678901234567890123456789012345678901234;
 
     constructor() {
         vm.etch(RANDOM_BYTES, proxyTo(RANDOM_BYTES_SIG));
@@ -150,14 +153,14 @@ contract PrecompileHandler is Precompiles {
         vm.ffi(inputs);
     }
 
-    function subcall(string calldata method, bytes calldata body) public returns (bytes memory) {
+    function subcall(string calldata method, bytes calldata body) public returns (uint64, bytes memory) {
         uint256 blockNumber = uint256(vm.getBlockNumber());
-        bytes32 privateKey = 0x1234567890123456789012345678901234567890123456789012345678901234;
         bytes memory params = abi.encode(blockNumber, method, body, privateKey);
         string[] memory inputs = new string[](2);
         inputs[0] = "src/precompiles/target/release/subcall";
         inputs[1] = vm.toString(params);
-        return vm.ffi(inputs);
+        bytes memory result = vm.ffi(inputs);
+        return abi.decode(result, (uint64, bytes));
     }
     
     function core_calldata_public_key() public returns (bytes memory) {
@@ -181,27 +184,52 @@ contract PrecompileHandler is Precompiles {
         return vm.ffi(inputs);
     }
 
-  function proxyTo(bytes4 sig) internal view returns (bytes memory) {
-    address prec = address(this);
-    bytes memory ptr;
+    function proxyTo(bytes4 sig) internal view returns (bytes memory) {
+        address prec = address(this);
+        bytes memory ptr;
 
-    assembly {
-      ptr := mload(0x40)
-      mstore(ptr, 0x60)
-      let mc := add(ptr, 0x20)
-      let addrPrefix := shl(0xf8, 0x73)
-      let addr := shl(0x58, prec)
-      let sigPrefix := shl(0x50, 0x63)
-      let shiftedSig := shl(0x30, shr(0xe0, sig))
-      let suffix := 0x600060043601
-      mstore(mc, or(addrPrefix, or(addr, or(sigPrefix, or(shiftedSig, suffix)))))
-      mc := add(mc, 0x20)
-      mstore(mc, 0x8260e01b82523660006004840137600080828434885af13d6000816000823e82)
-      mc := add(mc, 0x20)
-      mstore(mc, 0x60008114604a578282f35b8282fd000000000000000000000000000000000000)
-      mstore(0x40, add(ptr, 0x80))
+        assembly {
+        ptr := mload(0x40)
+        mstore(ptr, 0x60)
+        let mc := add(ptr, 0x20)
+        let addrPrefix := shl(0xf8, 0x73)
+        let addr := shl(0x58, prec)
+        let sigPrefix := shl(0x50, 0x63)
+        let shiftedSig := shl(0x30, shr(0xe0, sig))
+        let suffix := 0x600060043601
+        mstore(mc, or(addrPrefix, or(addr, or(sigPrefix, or(shiftedSig, suffix)))))
+        mc := add(mc, 0x20)
+        mstore(mc, 0x8260e01b82523660006004840137600080828434885af13d6000816000823e82)
+        mc := add(mc, 0x20)
+        mstore(mc, 0x60008114604a578282f35b8282fd000000000000000000000000000000000000)
+        mstore(0x40, add(ptr, 0x80))
+        }
+
+        return ptr;
     }
 
-    return ptr;
-  }
+    function proxyTo2(bytes4 sig) internal view returns (bytes memory) {
+        address prec = address(this);
+        bytes memory ptr;
+
+        assembly {
+            ptr := mload(0x40)
+            mstore(ptr, 0x60)
+            let mc := add(ptr, 0x20)
+            let addrPrefix := shl(0xf8, 0x73)
+            let addr := shl(0x58, prec)
+            let sigPrefix := shl(0x50, 0x63)
+            let shiftedSig := shl(0x30, shr(0xe0, sig))
+            let suffix := 0x600060043601
+            mstore(mc, or(addrPrefix, or(addr, or(sigPrefix, or(shiftedSig, suffix)))))
+            mc := add(mc, 0x20)
+            mstore(mc, 0x8260e01b82523660006004840137600080828434885af13d6000816000823e82)
+            mc := add(mc, 0x20)
+            mstore(mc, 0x60008114604a578282f35b8282fd000000000000000000000000000000000000)
+            mstore(0x40, add(ptr, 0x80))
+        }
+
+        return ptr;
+    }
 }
+

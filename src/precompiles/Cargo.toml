@@ -59,6 +59,10 @@ path = "src/main.rs"
 name = "rofl_is_authorized_origin"
 path = "src/main.rs"
 
+[[bin]]
+name = "decode"
+path = "src/main.rs"
+
 [dependencies]
 ethabi = "18.0"
 hex = "0.4"
