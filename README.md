@@ -24,10 +24,6 @@ The project provides several key precompiles:
   - Undelegations
   - Receipt tracking
 
-### Gas Management
-- `GasUsedPrecompile`: Track gas usage
-- `PadGasPrecompile`: Adjust gas consumption
-
 ## Key Features
 
 1. **Sapphire precompiles as contracts**
