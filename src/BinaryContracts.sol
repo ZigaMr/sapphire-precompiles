@@ -177,15 +177,6 @@ contract SubcallPrecompile2 {
     mapping(address => uint256) public consensusBalances;
     mapping(address => mapping(address => uint256)) public delegations; // delegator => validator => shares
     
-    // Pending undelegations per epoch
-    struct Undelegation {
-        address from;     // validator 
-        address to;      // delegator
-        uint256 shares;
-        uint256 amount;
-    }
-    mapping(uint256 => Undelegation[]) public pendingUndelegations;
-
     // Receipts state
     struct Receipt {
         uint8 kind;      // 1=delegate, 2=undelegate_start, 3=undelegate_done
@@ -199,45 +190,156 @@ contract SubcallPrecompile2 {
     fallback(bytes calldata input) external returns (bytes memory) {
         (string memory method, bytes memory body) = abi.decode(input, (string, bytes));
         
-        // Pack state into ABI encoded bytes
-        bytes memory state = abi.encode(
-            consensusBalances,
-            delegations,
-            pendingUndelegations,
-            receipts
-        );
-
-        uint256 blockNumber = uint256(vm.getBlockNumber());
-        bytes32 privateKey = 0x1234567890123456789012345678901234567890123456789012345678901234;
-        
-        // Include state in params
-        bytes memory params = abi.encode(blockNumber, method, body, privateKey, state);
-        
-        string[] memory inputs = new string[](2);
-        inputs[0] = "src/precompiles/target/release/subcall";
-        inputs[1] = vm.toString(params);
-        
-        // Get response and updated state
-        bytes memory response = vm.ffi(inputs);
-        
-        // Decode response and state
-        (bytes memory result, bytes memory newState) = abi.decode(response, (bytes, bytes));
-        
-        // Update state by copying values individually
-        (
-            mapping(address => uint256) memory newBalances,
-            mapping(address => mapping(address => uint256)) memory newDelegations,
-            mapping(uint256 => Undelegation[]) memory newUndelegations,
-            mapping(address => mapping(uint256 => Receipt)) memory newReceipts
-        ) = abi.decode(newState, (mapping(address => uint256), mapping(address => mapping(address => uint256)), mapping(uint256 => Undelegation[]), mapping(address => mapping(uint256 => Receipt))));
-        
-        // Copy values to storage
-        consensusBalances = newBalances;
-        delegations = newDelegations;
-        pendingUndelegations = newUndelegations;
-        receipts = newReceipts;
-
-        return result;
+        if (method == "consensus.Delegate") {
+            // Skip map header (0xa2 or 0xa3)
+            uint256 offset = 1;
+            uint8 mapPairs = uint8(body[0]) - 0xa0;
+            require(mapPairs == 2 || mapPairs == 3, "Invalid map size");
+            
+            bytes memory to;
+            uint128 amount;
+            bytes memory token;
+            uint64 receiptId;
+            bool hasReceipt = false;
+            
+            for (uint8 i = 0; i < mapPairs; i++) {
+                require(body[offset] >= 0x62 && body[offset] <= 0x67, "Invalid key length");
+                uint8 keyLen = uint8(body[offset] - 0x60);
+                offset += 1;
+                bytes memory key = bytes(body[offset:offset + keyLen]);
+                offset += keyLen;
+                
+                if (keccak256(key) == keccak256("to")) {
+                    require(body[offset] == 0x55, "Invalid CBOR: expected 21 byte address");
+                    offset += 1;
+                    to = bytes(body[offset:offset+21]);
+                    offset += 21;
+                } 
+                else if (keccak256(key) == keccak256("amount")) {
+                    if (body[offset] == 0x82) { // Array of [amount, token]
+                        offset += 1;
+                        require(body[offset] == 0x50, "Invalid CBOR: expected 16 byte amount");
+                        offset += 1;
+                        amount = uint128(bytes16(body[offset:offset+16]));
+                        offset += 16;
+                        
+                        uint8 tokenLen = uint8(body[offset] - 0x40);
+                        offset += 1;
+                        token = bytes(body[offset:offset+tokenLen]);
+                        offset += tokenLen;
+                    } else {
+                        require(body[offset] == 0x50, "Invalid CBOR: expected 16 byte amount");
+                        offset += 1;
+                        amount = uint128(bytes16(body[offset:offset+16]));
+                        offset += 16;
+                    }
+                }
+                else if (keccak256(key) == keccak256("receipt")) {
+                    require(body[offset] == 0x1b, "Invalid CBOR: expected uint64 receipt");
+                    offset += 1;
+                    receiptId = uint64(bytes8(body[offset:offset+8]));
+                    offset += 8;
+                    hasReceipt = true;
+                    require(receiptId >= 4294967296, "Invalid receipt ID");
+                }
+            }
+            
+            // Update state
+            address delegator = msg.sender;
+            address validator = address(uint160(uint256(bytes32(to))));
+            
+            // Update delegations and balances
+            delegations[delegator][validator] += amount;
+            consensusBalances[validator] += amount;
+            
+            // Store receipt if provided
+            if (hasReceipt) {
+                receipts[delegator][receiptId] = Receipt({
+                    kind: 1, // Delegate
+                    shares: 0,  // Will be updated when receipt is taken
+                    amount: amount,
+                    epoch: uint256(vm.getBlockNumber()),
+                    error: ""
+                });
+            }
+        }
+        else if (method == "consensus.Undelegate") {
+            // Skip map header (0xa2 or 0xa3)
+            uint256 offset = 1;
+            uint8 mapPairs = uint8(body[0]) - 0xa0;
+            require(mapPairs == 2 || mapPairs == 3, "Invalid map size");
+            
+            bytes memory from;
+            uint128 shares;
+            uint64 receiptId;
+            bool hasReceipt = false;
+            
+            for (uint8 i = 0; i < mapPairs; i++) {
+                require(body[offset] >= 0x62 && body[offset] <= 0x67, "Invalid key length");
+                uint8 keyLen = uint8(body[offset] - 0x60);
+                offset += 1;
+                bytes memory key = bytes(body[offset:offset + keyLen]);
+                offset += keyLen;
+                
+                if (keccak256(key) == keccak256("from")) {
+                    require(body[offset] == 0x55, "Invalid CBOR: expected 21 byte address");
+                    offset += 1;
+                    from = bytes(body[offset:offset+21]);
+                    offset += 21;
+                }
+                else if (keccak256(key) == keccak256("shares")) {
+                    require(body[offset] == 0x50, "Invalid CBOR: expected 16 byte amount");
+                    offset += 1;
+                    shares = uint128(bytes16(body[offset:offset+16]));
+                    offset += 16;
+                }
+                else if (keccak256(key) == keccak256("receipt")) {
+                    require(body[offset] == 0x1b, "Invalid CBOR: expected uint64 receipt");
+                    offset += 1;
+                    receiptId = uint64(bytes8(body[offset:offset+8]));
+                    offset += 8;
+                    hasReceipt = true;
+                    require(receiptId >= 4294967296, "Invalid receipt ID");
+                }
+            }
+            
+            // Update state
+            address delegator = msg.sender;
+            address validator = address(uint160(uint256(bytes32(from))));
+            
+            // Verify sufficient shares
+            require(delegations[delegator][validator] >= shares, "Insufficient shares");
+            
+            // Update delegations and balances
+            delegations[delegator][validator] -= shares;
+            consensusBalances[validator] -= shares;
+            
+            // Store receipt if provided
+            if (hasReceipt) {
+                receipts[delegator][receiptId] = Receipt({
+                    kind: 2, // UndelegateStart
+                    shares: shares,
+                    amount: 0, // Will be updated when undelegation completes
+                    epoch: uint256(vm.getBlockNumber()),
+                    error: ""
+                });
+            }
+        }
+        else{
+            // Continue with FFI call
+            uint256 blockNumber = uint256(vm.getBlockNumber());
+            bytes32 privateKey = 0x1234567890123456789012345678901234567890123456789012345678901234;
+            
+            bytes memory params = abi.encode(blockNumber, method, body, privateKey);
+            
+            string[] memory inputs = new string[](2);
+            inputs[0] = "src/precompiles/target/release/subcall";
+            inputs[1] = vm.toString(params);
+            
+            bytes memory response = vm.ffi(inputs);
+            (bytes memory result, bytes memory newState) = abi.decode(response, (bytes, bytes));
+            return result;
+        }
     }
 
     receive() external payable { revert("No ether accepted"); }
